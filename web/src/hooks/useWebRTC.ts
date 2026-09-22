@@ -95,8 +95,9 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
         pcsRef.current.forEach((pc) => pc.close());
         pcsRef.current.clear();
       };
-    } catch {
-      setError("Failed to start screen share");
+    } catch (err) {
+      console.error("[host] getDisplayMedia failed:", err);
+      setError(err instanceof Error ? err.name + ": " + err.message : "Failed to start screen share");
     }
   }, [guests, sendOfferToGuest]);
 
