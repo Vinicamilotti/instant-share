@@ -56,7 +56,9 @@ func NewRelay() *Relay {
 	}, webrtc.RTPCodecTypeAudio)
 
 	se := webrtc.SettingEngine{}
-	se.SetLite(true)
+	if !config.HasTURN() {
+		se.SetLite(true)
+	}
 	se.SetICETimeouts(10*time.Second, 10*time.Second, 2*time.Second)
 	se.SetInterfaceFilter(func(name string) bool {
 		if name == "lo" || strings.HasPrefix(name, "lo") {
