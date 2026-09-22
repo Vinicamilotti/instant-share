@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"instant-share/config"
 	"instant-share/id"
 	"instant-share/model"
 	"instant-share/sfu"
@@ -98,6 +99,7 @@ func WebSocket(w http.ResponseWriter, r *http.Request) {
 			log.Printf("host joined session %s", sessionID)
 
 			ensureRelay(sessionID, sess)
+			sendTURNConfig(sc)
 
 		case "guest-join":
 			role = "guest"
@@ -110,6 +112,7 @@ func WebSocket(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("guest %s joined session %s", p.Name, sessionID)
 
+			sendTURNConfig(sc)
 			sendGuestList(sessionID)
 			notifyHostGuestJoined(sessionID, guestID, p.Name)
 
@@ -252,6 +255,15 @@ func ensureRelay(sessionID string, sess *model.Session) {
 
 func key(sessionID, guestID string) string {
 	return sessionID + ":" + guestID
+}
+
+func sendTURNConfig(sc *safeConn) {
+	servers := config.ICEServerConfigs()
+	if len(servers) == 0 {
+		return
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"iceServers": servers})
+	sc.writeJSON(wsMessage{Type: "turn-config", Payload: payload})
 }
 
 func isHost(sessionID string, conn *websocket.Conn) bool {

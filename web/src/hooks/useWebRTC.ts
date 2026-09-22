@@ -1,34 +1,47 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { Guest, WSMessage } from "../lib/types";
+import type { Guest, WSMessage, QualityPreset, QualityConfig } from "../lib/types";
 import { connectWS, sendWS } from "../lib/ws";
 
 interface UseWebRTCOptions {
   sessionId: string;
   role: "host" | "guest";
   name?: string;
+  quality?: QualityPreset;
 }
 
-export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
+const QUALITY: Record<QualityPreset, QualityConfig> = {
+  low:    { width: 1280, height: 720,  frameRate: 15, maxBitrate: 2_000_000 },
+  medium: { width: 1920, height: 1080, frameRate: 30, maxBitrate: 5_000_000 },
+  high:   { width: 1920, height: 1080, frameRate: 30, maxBitrate: 10_000_000 },
+  ultra:  { width: 2560, height: 1440, frameRate: 30, maxBitrate: 20_000_000 },
+};
+
+export function useWebRTC({ sessionId, role, name, quality }: UseWebRTCOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const iceServersRef = useRef<RTCConfiguration>({});
   const [connected, setConnected] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [guests, setGuests] = useState<Guest[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const rtcConfig: RTCConfiguration = {};
-
   const startScreenShare = useCallback(async () => {
     try {
+      const cfg = QUALITY[quality ?? 'high'];
+
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: {
+          width: { ideal: cfg.width },
+          height: { ideal: cfg.height },
+          frameRate: { ideal: cfg.frameRate },
+        },
       });
       streamRef.current = stream;
       setLocalStream(stream);
 
-      const pc = new RTCPeerConnection(rtcConfig);
+      const pc = new RTCPeerConnection(iceServersRef.current);
       pcRef.current = pc;
 
       pc.oniceconnectionstatechange = () => {
@@ -55,6 +68,16 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+
+      const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) {
+        const params = sender.getParameters();
+        if (!params.encodings) params.encodings = [{}];
+        params.encodings[0].maxBitrate = cfg.maxBitrate;
+        params.encodings[0].maxFramerate = cfg.frameRate;
+        await sender.setParameters(params);
+      }
+
       console.log("[host] host-offer SDP:", pc.localDescription?.sdp.substring(0, 200));
 
       if (wsRef.current) {
@@ -76,7 +99,7 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
       console.error("[host] getDisplayMedia failed:", err);
       setError(err instanceof Error ? err.name + ": " + err.message : "Failed to start screen share");
     }
-  }, []);
+  }, [quality]);
 
   const handleWSMessage = useCallback(
     (msg: WSMessage) => {
@@ -87,6 +110,12 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
 
         case "guest-joined":
           break;
+
+        case "turn-config": {
+          iceServersRef.current = msg.payload as RTCConfiguration;
+          console.log("[ws] TURN config received");
+          break;
+        }
 
         case "host-answer": {
           console.log("[host] answer received from SFU");
@@ -105,7 +134,7 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
 
         case "offer": {
           console.log("[guest] offer received from SFU");
-          const pc = new RTCPeerConnection(rtcConfig);
+          const pc = new RTCPeerConnection(iceServersRef.current);
           pcRef.current = pc;
 
           pc.oniceconnectionstatechange = () => {

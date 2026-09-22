@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"instant-share/config"
 	"instant-share/handler"
 )
 
@@ -14,6 +15,8 @@ import (
 var staticFiles embed.FS
 
 func main() {
+	config.Init()
+
 	addr := os.Getenv("INSTANT_SHARE_ADDR")
 	if addr == "" {
 		addr = "0.0.0.0:8080"

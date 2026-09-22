@@ -1,10 +1,12 @@
 import { useParams } from "react-router";
 import { useWebRTC } from "../hooks/useWebRTC";
+import type { QualityPreset } from "../lib/types";
 import { useEffect, useRef, useState } from "react";
 
 export function Host() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [quality, setQuality] = useState<QualityPreset>('high');
   const {
     connected,
     localStream,
@@ -12,7 +14,7 @@ export function Host() {
     error,
     startScreenShare,
     kick,
-  } = useWebRTC({ sessionId: sessionId!, role: "host" });
+  } = useWebRTC({ sessionId: sessionId!, role: "host", quality });
 
   const [link, setLink] = useState("");
   const [copied, setCopied] = useState(false);
@@ -73,9 +75,25 @@ export function Host() {
             style={{ width: "100%", height: "100%", borderRadius: 8 }}
           />
         ) : (
-          <button onClick={startScreenShare} style={{ padding: "12px 24px", fontSize: 16 }}>
-            Compartilhar tela
-          </button>
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <label htmlFor="quality" style={{ marginRight: 8 }}>Qualidade:</label>
+              <select
+                id="quality"
+                value={quality}
+                onChange={e => setQuality(e.target.value as QualityPreset)}
+                style={{ padding: "6px 12px", fontSize: 14 }}
+              >
+                <option value="low">Baixa (720p)</option>
+                <option value="medium">Media (1080p)</option>
+                <option value="high">Alta (1080p, bitrate alto)</option>
+                <option value="ultra">Ultra (1440p)</option>
+              </select>
+            </div>
+            <button onClick={startScreenShare} style={{ padding: "12px 24px", fontSize: 16 }}>
+              Compartilhar tela
+            </button>
+          </div>
         )}
       </div>
 

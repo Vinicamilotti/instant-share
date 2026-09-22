@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"instant-share/config"
+
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
@@ -33,9 +35,25 @@ type Relay struct {
 
 func NewRelay() *Relay {
 	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		log.Printf("[sfu] register codecs error: %v", err)
-	}
+
+	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack"}, webrtc.RTPCodecTypeVideo)
+	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
+	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "transport-cc"}, webrtc.RTPCodecTypeVideo)
+
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
+		PayloadType:        102,
+	}, webrtc.RTPCodecTypeVideo)
+
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000},
+		PayloadType:        96,
+	}, webrtc.RTPCodecTypeVideo)
+
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio)
 
 	se := webrtc.SettingEngine{}
 	se.SetLite(true)
@@ -50,6 +68,10 @@ func NewRelay() *Relay {
 		return false
 	})
 
+	if ip := config.SFUAdvertiseIP; ip != "" {
+		se.SetNAT1To1IPs([]string{ip}, webrtc.ICECandidateTypeHost)
+	}
+
 	api := webrtc.NewAPI(
 		webrtc.WithMediaEngine(m),
 		webrtc.WithSettingEngine(se),
@@ -62,6 +84,12 @@ func NewRelay() *Relay {
 	}
 }
 
+func (r *Relay) peerConfig() webrtc.Configuration {
+	return webrtc.Configuration{
+		ICEServers: config.ICEServers(),
+	}
+}
+
 func (r *Relay) ProcessHostOffer(sdpStr string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -71,7 +99,7 @@ func (r *Relay) ProcessHostOffer(sdpStr string) (string, error) {
 		return "", fmt.Errorf("unmarshal host offer: %w", err)
 	}
 
-	pc, err := r.api.NewPeerConnection(webrtc.Configuration{})
+	pc, err := r.api.NewPeerConnection(r.peerConfig())
 	if err != nil {
 		return "", fmt.Errorf("create host pc: %w", err)
 	}
@@ -196,7 +224,7 @@ func (r *Relay) CreateGuestSession(guestID string) (string, error) {
 		return "", fmt.Errorf("host track not ready")
 	}
 
-	pc, err := r.api.NewPeerConnection(webrtc.Configuration{})
+	pc, err := r.api.NewPeerConnection(r.peerConfig())
 	if err != nil {
 		return "", fmt.Errorf("create guest pc: %w", err)
 	}

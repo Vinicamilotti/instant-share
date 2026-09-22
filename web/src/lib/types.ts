@@ -32,3 +32,12 @@ export interface GuestJoinedPayload {
   id: string;
   name: string;
 }
+
+export type QualityPreset = 'low' | 'medium' | 'high' | 'ultra';
+
+export interface QualityConfig {
+  width: number;
+  height: number;
+  frameRate: number;
+  maxBitrate: number;
+}
