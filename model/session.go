@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 
+	"instant-share/sfu"
+
 	"github.com/pion/webrtc/v4"
 )
 
@@ -18,6 +20,7 @@ type Session struct {
 	Host    *webrtc.PeerConnection
 	Guests  map[string]*Guest
 	Created time.Time
+	Relay   *sfu.Relay
 }
 
 var (
@@ -47,6 +50,9 @@ func DeleteSession(id string) {
 	mu.Lock()
 	defer mu.Unlock()
 	if s, ok := sessions[id]; ok {
+		if s.Relay != nil {
+			s.Relay.Close()
+		}
 		if s.Host != nil {
 			s.Host.Close()
 		}
@@ -76,6 +82,9 @@ func RemoveGuest(sessionID, guestID string) {
 				g.Conn.Close()
 			}
 			delete(s.Guests, guestID)
+		}
+		if s.Relay != nil {
+			s.Relay.RemoveGuest(guestID)
 		}
 	}
 }
