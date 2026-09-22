@@ -230,13 +230,6 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
 
     ws.onclose = () => setConnected(false);
 
-    if (role === "guest") {
-      navigator.mediaDevices
-        .getUserMedia({ video: true })
-        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
-        .catch(() => {});
-    }
-
     return () => {
       pcRef.current?.close();
       pcsRef.current.forEach((pc) => pc.close());
