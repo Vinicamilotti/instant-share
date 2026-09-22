@@ -1,9 +1,10 @@
 import { useParams } from "react-router";
 import { useWebRTC } from "../hooks/useWebRTC";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function Host() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const videoRef = useRef<HTMLVideoElement>(null);
   const {
     connected,
     localStream,
@@ -19,6 +20,12 @@ export function Host() {
   useEffect(() => {
     setLink(`${location.origin}/${sessionId}`);
   }, [sessionId]);
+
+  useEffect(() => {
+    if (videoRef.current && localStream) {
+      videoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(link);
@@ -60,9 +67,7 @@ export function Host() {
       >
         {localStream ? (
           <video
-            ref={(el) => {
-              if (el) el.srcObject = localStream;
-            }}
+            ref={videoRef}
             autoPlay
             muted
             style={{ width: "100%", height: "100%", borderRadius: 8 }}

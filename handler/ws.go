@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 
 	"instant-share/id"
 	"instant-share/model"
@@ -15,6 +16,11 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+var (
+	hostConns  sync.Map
+	guestConns sync.Map
+)
+
 type wsMessage struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
@@ -24,22 +30,28 @@ type guestPayload struct {
 	Name string `json:"name"`
 }
 
-type sdpPayload struct {
-	SDP string `json:"sdp"`
-}
-
-type icePayload struct {
-	Candidate string `json:"candidate"`
-}
-
 type kickPayload struct {
 	GuestID string `json:"guest_id"`
 }
 
+type offerPayload struct {
+	SDP     string `json:"sdp"`
+	GuestID string `json:"guest_id"`
+}
+
+type answerPayload struct {
+	SDP     string `json:"sdp"`
+	GuestID string `json:"guest_id,omitempty"`
+}
+
+type icePayload struct {
+	Candidate string `json:"candidate"`
+	GuestID   string `json:"guest_id,omitempty"`
+}
+
 func WebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
-	session := model.GetSession(sessionID)
-	if session == nil {
+	if model.GetSession(sessionID) == nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
@@ -51,6 +63,9 @@ func WebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	var role string
+	var guestID string
+
 	for {
 		var msg wsMessage
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -59,80 +74,143 @@ func WebSocket(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "host-join":
-			handleHostJoin(sessionID, session, conn)
+			role = "host"
+			hostConns.Store(sessionID, conn)
+			log.Printf("host joined session %s", sessionID)
+
 		case "guest-join":
-			handleGuestJoin(sessionID, conn, msg.Payload)
+			role = "guest"
+			var p guestPayload
+			json.Unmarshal(msg.Payload, &p)
+			guestID, _ = id.New()
+
+			guestConns.Store(key(sessionID, guestID), conn)
+			model.AddGuest(sessionID, &model.Guest{ID: guestID, Name: p.Name})
+
+			log.Printf("guest %s joined session %s", p.Name, sessionID)
+
+			sendGuestList(sessionID)
+			notifyHostGuestJoined(sessionID, guestID, p.Name)
+
 		case "offer":
-			broadcastToGuests(sessionID, msg, conn)
+			var p offerPayload
+			json.Unmarshal(msg.Payload, &p)
+			log.Printf("[%s] offer → guest %s", sessionID, p.GuestID)
+			sendToGuest(sessionID, p.GuestID, msg)
+
 		case "answer":
-			sendToHost(session, msg)
+			var p answerPayload
+			json.Unmarshal(msg.Payload, &p)
+			p.GuestID = findGuestID(sessionID, conn)
+			data, _ := json.Marshal(p)
+			log.Printf("[%s] answer ← guest %s → host", sessionID, p.GuestID)
+			sendToHost(sessionID, wsMessage{Type: "answer", Payload: data})
+
 		case "ice-candidate":
-			relayICE(sessionID, session, msg, conn)
+			var p icePayload
+			json.Unmarshal(msg.Payload, &p)
+			if isHost(sessionID, conn) {
+				log.Printf("[%s] ICE host → guest %s", sessionID, p.GuestID)
+				sendToGuest(sessionID, p.GuestID, msg)
+			} else {
+				p.GuestID = findGuestID(sessionID, conn)
+				data, _ := json.Marshal(p)
+				log.Printf("[%s] ICE guest %s → host", sessionID, p.GuestID)
+				sendToHost(sessionID, wsMessage{Type: "ice-candidate", Payload: data})
+			}
+
 		case "kick":
-			handleKick(sessionID, session, msg.Payload)
+			var p kickPayload
+			json.Unmarshal(msg.Payload, &p)
+			handleKick(sessionID, p.GuestID)
 		}
+	}
+
+	if role == "host" {
+		hostConns.Delete(sessionID)
+		broadcastToGuests(sessionID, wsMessage{Type: "session-ended"})
+		model.DeleteSession(sessionID)
+		log.Printf("host disconnected from session %s", sessionID)
+	} else if role == "guest" && guestID != "" {
+		guestConns.Delete(key(sessionID, guestID))
+		model.RemoveGuest(sessionID, guestID)
+		sendGuestList(sessionID)
+		log.Printf("guest %s left session %s", guestID, sessionID)
 	}
 }
 
-func handleHostJoin(sessionID string, session *model.Session, conn *websocket.Conn) {
-	log.Printf("host joined session %s", sessionID)
-
-	conn.SetCloseHandler(func(code int, text string) error {
-		log.Printf("host disconnected from session %s", sessionID)
-		broadcastToGuests(sessionID, wsMessage{Type: "session-ended"}, nil)
-		model.DeleteSession(sessionID)
-		return nil
-	})
+func key(sessionID, guestID string) string {
+	return sessionID + ":" + guestID
 }
 
-func handleGuestJoin(sessionID string, conn *websocket.Conn, payload json.RawMessage) {
-	var p guestPayload
-	json.Unmarshal(payload, &p)
+func isHost(sessionID string, conn *websocket.Conn) bool {
+	if hc, ok := hostConns.Load(sessionID); ok && hc == conn {
+		return true
+	}
+	return false
+}
 
-	guestID, _ := id.New()
-
-	guest := &model.Guest{ID: guestID, Name: p.Name, Conn: nil}
-	model.AddGuest(sessionID, guest)
-
-	log.Printf("guest %s joined session %s", p.Name, sessionID)
-
-	conn.SetCloseHandler(func(code int, text string) error {
-		model.RemoveGuest(sessionID, guestID)
-		sendGuestList(sessionID)
-		return nil
+func findGuestID(sessionID string, conn *websocket.Conn) string {
+	prefix := sessionID + ":"
+	var found string
+	guestConns.Range(func(k, v any) bool {
+		if v == conn {
+			s := k.(string)
+			if len(s) > len(prefix) {
+				found = s[len(prefix):]
+			}
+			return false
+		}
+		return true
 	})
-
-	sendGuestList(sessionID)
+	if found == "" {
+		log.Printf("[%s] findGuestID: NOT FOUND for conn %p", sessionID, conn)
+	}
+	return found
 }
 
 func sendGuestList(sessionID string) {
 	guests := model.GetGuests(sessionID)
-	data, _ := json.Marshal(guests)
-	msg := wsMessage{Type: "guest-list", Payload: data}
-	broadcastToHost(sessionID, msg)
+	payload := map[string]any{"guests": guests}
+	data, _ := json.Marshal(payload)
+	sendToHost(sessionID, wsMessage{Type: "guest-list", Payload: data})
 }
 
-func broadcastToGuests(sessionID string, msg wsMessage, sender *websocket.Conn) {
-	// NOTE: in v1, WS is per-connection. For full broadcast, we'd need to track WS conns per guest.
-	// For now, the WebRTC relay handles media distribution.
+func notifyHostGuestJoined(sessionID, guestID, name string) {
+	payload := map[string]any{"id": guestID, "name": name}
+	data, _ := json.Marshal(payload)
+	sendToHost(sessionID, wsMessage{Type: "guest-joined", Payload: data})
 }
 
-func sendToHost(session *model.Session, msg wsMessage) {
-	// TODO: track host WS conn to send answer/ICE
+func sendToHost(sessionID string, msg wsMessage) {
+	if conn, ok := hostConns.Load(sessionID); ok {
+		conn.(*websocket.Conn).WriteJSON(msg)
+	}
 }
 
-func relayICE(sessionID string, session *model.Session, msg wsMessage, sender *websocket.Conn) {
-	// TODO: relay ICE between host and guests
+func sendToGuest(sessionID, guestID string, msg wsMessage) {
+	if conn, ok := guestConns.Load(key(sessionID, guestID)); ok {
+		conn.(*websocket.Conn).WriteJSON(msg)
+	}
 }
 
-func broadcastToHost(sessionID string, msg wsMessage) {
-	// TODO: send to host WS conn
+func broadcastToGuests(sessionID string, msg wsMessage) {
+	prefix := sessionID + ":"
+	guestConns.Range(func(k, v any) bool {
+		if len(k.(string)) > len(prefix) && k.(string)[:len(prefix)] == prefix {
+			v.(*websocket.Conn).WriteJSON(msg)
+		}
+		return true
+	})
 }
 
-func handleKick(sessionID string, session *model.Session, payload json.RawMessage) {
-	var p kickPayload
-	json.Unmarshal(payload, &p)
-
-	model.RemoveGuest(sessionID, p.GuestID)
+func handleKick(sessionID, guestID string) {
+	k := key(sessionID, guestID)
+	if conn, ok := guestConns.Load(k); ok {
+		conn.(*websocket.Conn).WriteJSON(wsMessage{Type: "kicked"})
+		conn.(*websocket.Conn).Close()
+	}
+	guestConns.Delete(k)
+	model.RemoveGuest(sessionID, guestID)
 	sendGuestList(sessionID)
 }

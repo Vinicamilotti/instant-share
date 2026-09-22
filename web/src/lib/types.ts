@@ -12,3 +12,23 @@ export interface HostSessionResponse {
   session_id: string;
   link: string;
 }
+
+export interface OfferPayload {
+  sdp: string;
+  guest_id: string;
+}
+
+export interface AnswerPayload {
+  sdp: string;
+  guest_id: string;
+}
+
+export interface IcePayload {
+  candidate: string;
+  guest_id: string;
+}
+
+export interface GuestJoinedPayload {
+  id: string;
+  name: string;
+}
