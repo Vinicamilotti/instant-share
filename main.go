@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 
 	"instant-share/handler"
 )
@@ -13,6 +14,11 @@ import (
 var staticFiles embed.FS
 
 func main() {
+	addr := os.Getenv("INSTANT_SHARE_ADDR")
+	if addr == "" {
+		addr = "0.0.0.0:8080"
+	}
+
 	staticFS, err := fs.Sub(staticFiles, "web/dist")
 	if err != nil {
 		log.Fatal(err)
@@ -34,8 +40,8 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	log.Println("instant-share listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	log.Printf("instant-share listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
 func staticFSFileExists(fsys fs.FS, path string) bool {

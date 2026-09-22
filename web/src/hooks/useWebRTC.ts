@@ -19,9 +19,7 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
   const [guests, setGuests] = useState<Guest[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const rtcConfig: RTCConfiguration = {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  };
+  const rtcConfig: RTCConfiguration = {};
 
   const sendOfferToGuest = useCallback((guestId: string) => {
     if (!streamRef.current) {
@@ -52,12 +50,20 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
       }
     };
 
-    streamRef.current.getTracks().forEach((track) =>
-      pc.addTrack(track, streamRef.current!)
-    );
+    streamRef.current.getTracks().forEach((track) => {
+      const sender = pc.addTrack(track, streamRef.current!);
+      if (sender.transport) {
+        sender.transport.onerror = null;
+      }
+      const transceiver = pc.getTransceivers().find((t) => t.sender === sender);
+      if (transceiver) {
+        transceiver.direction = "sendonly";
+      }
+    });
 
     pc.createOffer().then((offer) =>
       pc.setLocalDescription(offer).then(() => {
+        console.log("[host] offer SDP for", guestId, ":", pc.localDescription?.sdp.substring(0, 200));
         if (wsRef.current) {
           sendWS(wsRef.current, {
             type: "offer",
@@ -74,9 +80,8 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
   const startScreenShare = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true,
-      });
+      video: true,
+    });
       streamRef.current = stream;
       setLocalStream(stream);
 
@@ -137,10 +142,12 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
           };
 
           const sdp = JSON.parse(msg.payload.sdp as string) as RTCSessionDescriptionInit;
+          console.log("[guest] offer SDP:", (sdp.sdp ?? "").substring(0, 200));
           pc.setRemoteDescription(new RTCSessionDescription(sdp))
             .then(async () => {
               console.log("[guest] setRemoteDescription OK");
-              const answer = await pc.createAnswer();
+              const answer = await pc.createAnswer({ offerToReceiveVideo: true } as RTCOfferAnswerOptions);
+              console.log("[guest] answer SDP:", (answer.sdp ?? "").substring(0, 200));
               await pc.setLocalDescription(answer);
               console.log("[guest] answer created, sending...");
               if (wsRef.current) {
@@ -222,6 +229,13 @@ export function useWebRTC({ sessionId, role, name }: UseWebRTCOptions) {
     };
 
     ws.onclose = () => setConnected(false);
+
+    if (role === "guest") {
+      navigator.mediaDevices
+        .getUserMedia({ video: true })
+        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+        .catch(() => {});
+    }
 
     return () => {
       pcRef.current?.close();

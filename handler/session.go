@@ -37,9 +37,14 @@ func HostSession(w http.ResponseWriter, r *http.Request) {
 
 	model.CreateSession(sessionID)
 
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+
 	resp := hostSessionResponse{
 		SessionID: sessionID,
-		Link:      "https://instant-share.xyz/" + sessionID,
+		Link:      scheme + "://" + r.Host + "/" + sessionID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

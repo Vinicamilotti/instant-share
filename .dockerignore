@@ -1,0 +1,7 @@
+.git
+instant-share
+web/node_modules
+web/dist
+docs
+Makefile
+docker-compose.yml

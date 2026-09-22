@@ -1,0 +1,7 @@
+services:
+  instant-share:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      INSTANT_SHARE_ADDR: 0.0.0.0:8080
